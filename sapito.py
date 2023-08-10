@@ -1,16 +1,13 @@
 #!/usr/bin/env python
-# Seba Garcia whatever
-# Vero Valeros is coauthor
+# Authors:
+# Sebastian Garcia, sebastian.garcia@agents.fel.cvut.cz, eldraco@gmail.com
+# Veronica Valeros, vero.valeros@gmail.com, valerver@fel.cvut.cz
+# Stratosphere Laboratory, Czech Technical University in Prague
 
-from os import listdir
-from os.path import isfile, join
-import pickle
 import argparse
-import sys
-from datetime import datetime
-from scapy.all import *
-import re
 import macvendor
+from scapy.all import *
+from datetime import datetime
 
 class bcolors:
     HEADER = '\033[95m'
@@ -24,9 +21,8 @@ class bcolors:
     NORMAL = '\033[8m'
 
 # Store info about the clients
-clients = {}
 # The format of the clients is: {'MAC': 'name'}
-
+clients = {}
 
 def add_client(shw, srcip, name='unknown'):
     """ Add client to our list"""
@@ -59,43 +55,56 @@ def do(pkt):
             #len = UDPlayer.len
             if DNS in UDPlayer:
                 DNSlayer = pkt[UDP][DNS]
-                # fields = DNSlayer.fields # length, id, qtype, name, qd, an, ar qr, opcode, aa,tc,rd,ra,z,ad,cd,rcode,qdcount,ancount,nscount,arcount
-                # Amount of Questions: DNSlayer.qdcount
-                amount_of_questions = DNSlayer.qdcount
-                amount_of_additional_records = DNSlayer.arcount
-                amount_of_answers = DNSlayer.ancount
+                # The DNSlayer.fields are:
+                #  - length,id,qtype,name,qd,an,ar qr,opcode,
+                #    aa,tc,rd,ra,z,ad,cd,rcode,qdcount,ancount,
+                #    nscount,arcount
+                num_questions = DNSlayer.qdcount
+                num_additional_records = DNSlayer.arcount
+                num_answers = DNSlayer.ancount
                 # TODO: Find the Authoritative Nameservers
 
-                print(bcolors.HEADER + 'SrcMAC: {} ({}), SrcIP: {}. Name: \033[36m{}\033[95m . #Questions: {}. #Additional Records {}. #Answers: {}'.format(shw, mac_vendor, srcip, get_client(shw)['name'], amount_of_questions, amount_of_additional_records, amount_of_answers) + bcolors.ENDC)
-                question_name = DNSlayer.fields['qd']
+                print(bcolors.HEADER + f"\033[36m{datetime.now()}\033[95m | SrcMAC: \033[36m{shw}\033[95m | Vendor: \033[36m{mac_vendor}\033[95m | SrcIP: \033[36m{srcip}\033[95m | Name: \033[36m{get_client(shw)['name']}\033[95m | Questions: \033[36m{num_questions}\033[95m | Additional Records: \033[36m{num_additional_records}\033[95m | Answers: \033[36m{num_answers}\033[95m" + bcolors.ENDC)
+                try:
+                    question_name = DNSlayer.fields['qd']
+                except KeyError:
+                    return True
 
 
                 #####################
                 # Process the questions
-                if amount_of_questions:
-                    print('\tQuestions:')
-                for pos in range(0,amount_of_questions):
+                #
+                print(bcolors.HEADER + f' > Questions: \033[36m{num_questions}\033[95m' + bcolors.ENDC)
+                for pos in range(0,num_questions):
                     if args.debug:
-                        print('\t\t[Debug] Question Type: {}. Payload: {}'.format(question_name.qname, question_name.payload))
+                        print(f"\t[Debug] Question Type: {question_name.qname}. Payload: {question_name.payload}")
                     try:
-                        print('\t\t{}'.format(question_name.qname.decode('utf-8')))
+                        print(f"\t{question_name.qname.decode('utf-8')}")
                     except AttributeError:
                         # Some versions of scapy do not give a Byte String
-                        print('\t\t{}'.format(question_name.qname))
-                    question_name = question_name.payload
+                        print(f"\t{question_name}")
+                    try:
+                        question_name = question_name.payload
+                    except AttributeError:
+                        question_name = ""
 
 
                 #####################
                 # Process the Answers
                 #
+                print(bcolors.HEADER + f' > Answers: \033[36m{num_answers}\033[95m' + bcolors.ENDC)
                 # We will try to parse these answers by type
-                if amount_of_answers:
-                    print('\tAnswers:')
-                    answers_name = DNSlayer.fields['an']
+                if num_answers:
+                    try:
+                        answers_name = DNSlayer.fields['an']
+                    except KeyError:
+                        return True
 
                     # To process the answers we need to iterate over all of them
-                    # Process each answer one after the other. They are nested, so we need to process them by changing the value of answers_name on each loop
-                    for pos in range(0,amount_of_answers):
+                    #  - Process each answer one after the other.
+                    #  - They are nested, so we need to process them by changing
+                    #    the value of answers_name on each loop
+                    for pos in range(0,num_answers):
                         rdata = False
                         rrname = False
 
@@ -121,9 +130,14 @@ def do(pkt):
 
                         if args.debug:
                             try:
-                                print('\t\t[Debug] Answer Type: {}. Rdata: {}'.format(answers_name.name, rdata))
+                                print(f"\t[Debug] Answer Type: {answers_name.name} | Rdata: {rdata}")
                             except AttributeError:
-                                print('\t\t[Debug] Answer Type: {}.'.format(answers_name.name))
+                                print(f"\t[Debug] Answer Type: {answers_name.name}")
+
+                        # We check for the following resource records:
+                        #  - DNSRR
+                        #  - DNSRRSRV
+                        #  - DNSRRTXT
 
                         # Process Generic DNSRR (Resource Records)
                         if type(answers_name) == DNSRR:
@@ -398,6 +412,12 @@ def do(pkt):
                                     name = rdata
                                     if len(location.split('@')) < 2:
                                         # Some devices do not send a mac at all nor ip, only a name
+                                        # Bug to solve:
+                                        # In home1.pcap
+                                        # SrcMAC: B8:27:EB:ED:0C:2F (Raspberry Pi Foundation), SrcIP: 10.0.0.43. Name: Pi . #Questions: 0. #Additional Records 0. #Answers: 28
+                                        # This host named ['Pi._sftp-ssh._tcp.local.'] offers the service of Remote Audio Output Protocol on the MAC address B827EBED0C2F and device with name Pi
+
+
                                         print(bcolors.WARNING + '\t\t\tThis host named {} offers the service of Remote Audio Output Protocol on the device named {}'.format(name, macaddr, location) + bcolors.ENDC)
 
                                     else:
@@ -414,7 +434,7 @@ def do(pkt):
 
                         # In the answer section, TXT records give additional info about a resource reoord
                         elif type(answers_name) == DNSRRTXT:
-                            print('\t\t\tType {}. '.format(answers.name))
+                            print(f'Type: \033[36m{answers.name}\033[95m')
 
                         # Loop
                         answers_name = answers_name.payload
@@ -423,9 +443,10 @@ def do(pkt):
 
                 #####################
                 # Process the Additional records
+                # 
+                print(bcolors.HEADER + f' > Additional Records: \033[36m{num_additional_records}\033[95m' + bcolors.ENDC)
                 # Amount of additional records
-                if amount_of_additional_records:
-                    print('\tAdditional Records:')
+                if num_additional_records:
                     additional_name = DNSlayer.fields['ar']
 
                     # Some rdata comes as a list and some as a string. Lets convert the string into a list
@@ -454,7 +475,7 @@ def do(pkt):
 
 
 
-                    for pos in range(0,amount_of_additional_records):
+                    for pos in range(0,num_additional_records):
                         if args.debug:
                             print('\t\t[Debug] Additional Record. Type: {}. Rdata: {}. RRname: {}'.format(additional_name.name, rdata, rrname))
 
@@ -500,13 +521,38 @@ def do(pkt):
 
 # Main
 ####################
-if __name__ == '__main__':  
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v', '--verbose', help='Amount of verbosity. This shows more info about the results.', action='store', required=False, type=int)
-    parser.add_argument('-d', '--debug', help='Amount of debugging. This shows inner information about the flows.', action='store', required=False, type=int)
-    parser.add_argument('-r', '--readfile', help='Name of the pcap file to read.', action='store', required=False, type=str)
-    parser.add_argument('-i', '--interface', help='Name of the interface to use.', action='store', required=False, type=str)
-    parser.add_argument('-f', '--filter', help='Tcpdump style filter to use.', action='store', required=False, type=str)
+    parser.add_argument('-v',
+                        '--verbose',
+                        help='Verbosity level. This shows more info about the results.',
+                        action='store',
+                        required=False,
+                        type=int)
+    parser.add_argument('-d',
+                        '--debug',
+                        help='Debugging level. This shows inner information about the flows.',
+                        action='store',
+                        required=False,
+                        type=int)
+    parser.add_argument('-r',
+                        '--readfile',
+                        help='Name of the pcap file to read.',
+                        action='store',
+                        required=False,
+                        type=str)
+    parser.add_argument('-i',
+                        '--interface',
+                        help='Name of the interface to use.',
+                        action='store',
+                        required=False,
+                        type=str)
+    parser.add_argument('-f',
+                        '--filter',
+                        help='Tcpdump style filter to use.',
+                        action='store',
+                        required=False,
+                        type=str)
 
     args = parser.parse_args()
 
@@ -514,8 +560,6 @@ if __name__ == '__main__':
     macvendor.refresh()
 
     if args.interface:
-        sniff(iface=args.interface,prn=do,store=0, filter=args.filter)
+        sniff(iface=args.interface, prn=do, store=0, filter=args.filter)
     elif args.readfile:
         sniff(offline=args.readfile,prn=do,store=0, filter=args.filter)
-
-
